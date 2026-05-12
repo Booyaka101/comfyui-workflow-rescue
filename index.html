@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ComfyUI Workflow Rescue</title>
+  <meta name="description" content="Recover the embedded ComfyUI workflow JSON from MP4, MOV, WebM, or MKV files exported by ComfyUI-VideoHelperSuite. Runs entirely in your browser." />
+  <style>
+    :root {
+      --bg: #14161a;
+      --fg: #e7e9ee;
+      --muted: #8b95a3;
+      --accent: #6aa6ff;
+      --ok: #5cd684;
+      --err: #ff7373;
+      --warn: #f0b657;
+      --panel: #1d2026;
+      --border: #2a2f38;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--fg);
+      font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      justify-content: center;
+      padding: 32px 16px 64px;
+    }
+    main { width: 100%; max-width: 720px; }
+    h1 { font-size: 22px; margin: 0 0 4px; font-weight: 600; }
+    .sub { color: var(--muted); font-size: 14px; margin: 0 0 24px; }
+    .drop {
+      border: 2px dashed var(--border);
+      border-radius: 12px;
+      padding: 56px 24px;
+      text-align: center;
+      transition: border-color .15s, background-color .15s;
+      cursor: pointer;
+      background: var(--panel);
+    }
+    .drop.hover { border-color: var(--accent); background: #1a2433; }
+    .drop p { margin: 0; }
+    .drop .big { font-size: 17px; }
+    .drop .small { color: var(--muted); font-size: 13px; margin-top: 8px; }
+    input[type=file] { display: none; }
+    .results { margin-top: 24px; }
+    .item {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    .item h2 { font-size: 15px; margin: 0 0 8px; font-weight: 600; word-break: break-all; }
+    .status { font-size: 13px; }
+    .status.ok { color: var(--ok); }
+    .status.err { color: var(--err); }
+    .status.warn { color: var(--warn); }
+    .actions { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+    button {
+      background: var(--accent);
+      color: #0b1320;
+      border: 0;
+      padding: 8px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.secondary {
+      background: transparent;
+      color: var(--fg);
+      border: 1px solid var(--border);
+      font-weight: 500;
+    }
+    button:hover { filter: brightness(1.1); }
+    .help {
+      margin-top: 32px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .help a { color: var(--accent); }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      background: #0c0e12;
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>ComfyUI Workflow Rescue</h1>
+    <p class="sub">Pulls the embedded workflow JSON out of MP4 / MOV / WebM / MKV files exported by ComfyUI-VideoHelperSuite. Everything runs locally in your browser — files never leave your computer.</p>
+
+    <label class="drop" id="drop">
+      <input type="file" id="file" accept="video/mp4,video/quicktime,video/x-m4v,video/webm,video/x-matroska,.mp4,.mov,.m4v,.webm,.mkv" multiple />
+      <p class="big">Drop a video file here, or click to choose one.</p>
+      <p class="small">Multiple files OK. Nothing is uploaded anywhere.</p>
+    </label>
+
+    <div class="results" id="results"></div>
+
+    <div class="help">
+      <p><strong>What this is for</strong></p>
+      <p>If you have an MP4 or WebM video that was made with ComfyUI's Video Helper Suite and the workflow no longer drag-drops into ComfyUI, the workflow data might still be embedded in the file — just in a shape the ComfyUI frontend can't read directly. This page extracts it and gives you a <code>workflow.json</code> file you can open with ComfyUI's normal <em>Load</em> button.</p>
+      <p><strong>If you get "no workflow found"</strong></p>
+      <p>For videos that include audio, the workflow may have been stripped at write time (see <a href="https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite/pull/653">VHS PR #653</a>). In that case the data isn't in the file and no tool can recover it. If you still have the no-audio temp file from the same generation, that one will usually work.</p>
+      <p><strong>Source / issues</strong></p>
+      <p>Open-source MIT — <a id="repolink" href="https://github.com/Booyaka101/comfyui-workflow-rescue">github.com/Booyaka101/comfyui-workflow-rescue</a>. File issues or PRs there.</p>
+    </div>
+  </main>
+
+  <script>
+    "use strict";
+
+    // -------- ISOBMFF (MP4 / MOV) parser, ported from the work behind
+    // Comfy-Org/ComfyUI_frontend#12114. Walks udta.meta.keys / ilst.data,
+    // and unwraps the legacy double-stringified prompt produced by VHS
+    // before its producer-side fix landed.
+
+    const MAX_READ_BYTES = 64 * 1024 * 1024;
+    const ASCII_OPEN_BRACE = 0x7b;
+    const ASCII_QUOTE = 0x22;
+    const ASCII_NULL = 0;
+    const BOX = {
+      USER_DATA: [0x75, 0x64, 0x74, 0x61],
+      META_DATA: [0x6d, 0x65, 0x74, 0x61],
+      ITEM_LIST: [0x69, 0x6c, 0x73, 0x74],
+      KEYS:      [0x6b, 0x65, 0x79, 0x73],
+      DATA:      [0x64, 0x61, 0x74, 0x61],
+      MOVIE:     [0x6d, 0x6f, 0x6f, 0x76],
+    };
+    const SIZE = { HEADER: 8, VERSION: 4, LOCALE: 4, ITEM_MIN: 8 };
+
+    function bufMatches(data, pos, target) {
+      if (pos + target.length > data.length) return false;
+      for (let i = 0; i < target.length; i++) if (data[pos + i] !== target[i]) return false;
+      return true;
+    }
+    function readU32(data, pos) {
+      if (pos + 4 > data.length) return 0;
+      return ((data[pos] << 24) | (data[pos + 1] << 16) | (data[pos + 2] << 8) | data[pos + 3]) >>> 0;
+    }
+    function findBox(data, start, end, target) {
+      for (let pos = start; pos < end - 8; pos++) {
+        const size = readU32(data, pos);
+        if (size < SIZE.ITEM_MIN) continue;
+        if (bufMatches(data, pos + 4, target)) return { start: pos + SIZE.HEADER, end: pos + size };
+        if (pos + size > end) return null;
+        pos += size - 1;
+      }
+      return null;
+    }
+    function readUtf8(data, start, end) {
+      return new TextDecoder().decode(data.subarray(start, end));
+    }
+    function unwrapStringifiedJson(text) {
+      if (!text.startsWith("\"")) return null;
+      try {
+        const inner = JSON.parse(text);
+        if (typeof inner !== "string") return null;
+        const parsed = JSON.parse(inner);
+        return typeof parsed === "object" && parsed !== null ? parsed : null;
+      } catch { return null; }
+    }
+    function extractIsobmffJson(data, start, end) {
+      let p = start;
+      while (p < end && data[p] !== ASCII_OPEN_BRACE && data[p] !== ASCII_QUOTE) p++;
+      if (p >= end) return null;
+      try {
+        const text = new TextDecoder().decode(data.subarray(p, end));
+        const parsed = JSON.parse(text);
+        if (typeof parsed === "string") {
+          const inner = JSON.parse(parsed);
+          return typeof inner === "object" && inner !== null ? inner : null;
+        }
+        return parsed;
+      } catch { return null; }
+    }
+    function parseKeysBox(data, start, end) {
+      const map = new Map();
+      let p = start + SIZE.VERSION;
+      if (p + 4 > end) return map;
+      const count = readU32(data, p);
+      p += 4;
+      for (let i = 1; i <= count; i++) {
+        if (p + SIZE.HEADER > end) break;
+        const sz = readU32(data, p);
+        p += SIZE.HEADER;
+        const nameEnd = p + sz - SIZE.HEADER;
+        if (sz < SIZE.ITEM_MIN || nameEnd > end) break;
+        map.set(i, readUtf8(data, p, nameEnd));
+        p = nameEnd;
+      }
+      return map;
+    }
+    function parseIsobmffMetadata(data) {
+      let udta = findBox(data, 0, data.length, BOX.USER_DATA);
+      if (!udta) {
+        const moov = findBox(data, 0, data.length, BOX.MOVIE);
+        if (moov) udta = findBox(data, moov.start, moov.end, BOX.USER_DATA);
+      }
+      if (!udta) return {};
+      const meta = findBox(data, udta.start, udta.end, BOX.META_DATA);
+      if (!meta) return {};
+      const metaContent = meta.start + SIZE.VERSION;
+      const keysBox = findBox(data, metaContent, meta.end, BOX.KEYS);
+      if (!keysBox) return {};
+      const keysMap = parseKeysBox(data, keysBox.start, keysBox.end);
+      const ilstBox = findBox(data, metaContent, meta.end, BOX.ITEM_LIST);
+      if (!ilstBox) return {};
+
+      const out = {};
+      let p = ilstBox.start;
+      while (p < ilstBox.end - SIZE.HEADER) {
+        const itemSize = readU32(data, p);
+        if (itemSize <= SIZE.HEADER || p + itemSize > ilstBox.end) break;
+        const itemStart = p, itemEnd = p + itemSize;
+        const idx = readU32(data, itemStart + 4);
+        const name = keysMap.get(idx);
+        if (name) {
+          const dataBox = findBox(data, itemStart + SIZE.HEADER, itemEnd, BOX.DATA);
+          if (dataBox) {
+            const valStart = dataBox.start + SIZE.VERSION + SIZE.LOCALE;
+            if (valStart < dataBox.end) {
+              const value = extractIsobmffJson(data, valStart, dataBox.end);
+              if (value !== null) out[name.toLowerCase()] = value;
+            }
+          }
+        }
+        p += itemSize;
+      }
+      return out;
+    }
+
+    // -------- EBML (WebM / MKV) parser, ported from the work behind
+    // Comfy-Org/ComfyUI_frontend#12115. SimpleTag / TagName / TagValue.
+
+    const EBML_MAX_READ = 8 * 1024 * 1024;
+    const WEBM_SIGNATURE = [0x1a, 0x45, 0xdf, 0xa3];
+    const TAG_NAME = Uint8Array.from([0x45, 0xa3]);
+    const TAG_VALUE = Uint8Array.from([0x44, 0x87]);
+    const SIMPLE_TAG = Uint8Array.from([0x67, 0xc8]);
+
+    function hasWebmSig(data) {
+      return WEBM_SIGNATURE.every((b, i) => data[i] === b);
+    }
+    function firstSetBitPos(byte) {
+      for (let mask = 0x80, pos = 1; mask !== 0; mask >>= 1, pos++) if ((byte & mask) !== 0) return pos;
+      return 0;
+    }
+    function readVint(data, pos) {
+      if (pos >= data.length) return null;
+      const b = data[pos];
+      if ((b & 0x80) === 0x80) return { value: b & 0x7f, length: 1 };
+      const len = firstSetBitPos(b);
+      if (len === 0 || pos + len > data.length) return null;
+      let v = data[pos] & (0xff >> len);
+      for (let i = 1; i < len; i++) v = (v << 8) | data[pos + i];
+      return { value: v, length: len };
+    }
+    function matchesId(data, pos, id) {
+      if (pos + id.length > data.length) return false;
+      for (let i = 0; i < id.length; i++) if (data[pos + i] !== id[i]) return false;
+      return true;
+    }
+    function findNull(data, start, maxLen) {
+      const end = Math.min(start + maxLen, data.length);
+      for (let p = start; p < end; p++) if (data[p] === ASCII_NULL) return p;
+      return end;
+    }
+    function findJsonStart(data, start, len) {
+      for (let p = start; p < start + len; p++) if (data[p] === ASCII_OPEN_BRACE) return p;
+      return null;
+    }
+    function findJsonEnd(text) {
+      let bc = 1, p = 1;
+      while (bc > 0 && p < text.length) {
+        if (text[p] === "{") bc++;
+        if (text[p] === "}") bc--;
+        p++;
+      }
+      return bc === 0 ? p : null;
+    }
+    function readEbmlJson(data, start, len) {
+      if (len <= 0) return null;
+      const nullEnd = findNull(data, start, len);
+      const fullText = new TextDecoder().decode(data.subarray(start, nullEnd)).trim();
+      const unwrapped = unwrapStringifiedJson(fullText);
+      if (unwrapped !== null) return unwrapped;
+      const jsStart = findJsonStart(data, start, nullEnd - start);
+      if (jsStart === null) return null;
+      const text = new TextDecoder().decode(data.subarray(jsStart, nullEnd));
+      const jsEnd = findJsonEnd(text);
+      if (jsEnd === null) return null;
+      try { return JSON.parse(text.substring(0, jsEnd)); } catch { return null; }
+    }
+    function parseEbmlMetadata(data) {
+      if (data.length < 4 || !hasWebmSig(data)) return {};
+      const out = {};
+      let pos = 0;
+      while (pos < data.length - 4) {
+        if (matchesId(data, pos, SIMPLE_TAG)) {
+          pos += SIMPLE_TAG.length;
+          const sz = readVint(data, pos); if (!sz) { pos++; continue; }
+          pos += sz.length;
+          const tagEnd = pos + sz.value;
+          let name = null, valuePos = -1, valueLen = -1;
+          while (pos < tagEnd - 2) {
+            if (matchesId(data, pos, TAG_NAME)) {
+              pos += TAG_NAME.length;
+              const ln = readVint(data, pos); if (!ln) break;
+              pos += ln.length;
+              name = new TextDecoder().decode(data.subarray(pos, pos + ln.value)).trim();
+              pos += ln.value;
+            } else if (matchesId(data, pos, TAG_VALUE)) {
+              pos += TAG_VALUE.length;
+              const lv = readVint(data, pos); if (!lv) break;
+              pos += lv.length;
+              valuePos = pos; valueLen = lv.value;
+              pos += lv.value;
+            } else pos++;
+          }
+          if (name && valuePos >= 0) {
+            const lower = name.toLowerCase();
+            if (lower === "prompt" || lower === "workflow") {
+              const parsed = readEbmlJson(data, valuePos, valueLen);
+              if (parsed !== null) out[lower] = parsed;
+            }
+          }
+          pos = tagEnd;
+        } else pos++;
+      }
+      return out;
+    }
+
+    // -------- UI
+
+    const dropEl = document.getElementById("drop");
+    const fileEl = document.getElementById("file");
+    const resultsEl = document.getElementById("results");
+
+    function renderResult(name, status, kind, payload) {
+      const item = document.createElement("div");
+      item.className = "item";
+      const h = document.createElement("h2");
+      h.textContent = name;
+      item.appendChild(h);
+      const s = document.createElement("div");
+      s.className = "status " + kind;
+      s.textContent = status;
+      item.appendChild(s);
+      if (payload && (payload.workflow || payload.prompt)) {
+        const actions = document.createElement("div");
+        actions.className = "actions";
+        if (payload.workflow) {
+          actions.appendChild(makeDownloadButton("workflow.json", payload.workflow, "primary", baseName(name) + ".workflow.json"));
+        }
+        if (payload.prompt) {
+          actions.appendChild(makeDownloadButton("prompt.json", payload.prompt, "secondary", baseName(name) + ".prompt.json"));
+        }
+        item.appendChild(actions);
+      }
+      resultsEl.appendChild(item);
+    }
+    function baseName(s) {
+      const m = s.lastIndexOf(".");
+      return m > 0 ? s.slice(0, m) : s;
+    }
+    function makeDownloadButton(label, obj, cls, filename) {
+      const b = document.createElement("button");
+      b.textContent = "Download " + label;
+      if (cls === "secondary") b.classList.add("secondary");
+      b.addEventListener("click", () => {
+        const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      });
+      return b;
+    }
+
+    async function handleFile(file) {
+      const lower = (file.name || "").toLowerCase();
+      const isWebm = lower.endsWith(".webm") || lower.endsWith(".mkv") || file.type === "video/webm" || file.type === "video/x-matroska";
+      const limit = isWebm ? EBML_MAX_READ : MAX_READ_BYTES;
+      const slice = file.slice(0, limit);
+      const buf = await slice.arrayBuffer();
+      const data = new Uint8Array(buf);
+      const parsed = isWebm ? parseEbmlMetadata(data) : parseIsobmffMetadata(data);
+      const hasWorkflow = parsed && parsed.workflow;
+      const hasPrompt = parsed && parsed.prompt;
+      if (hasWorkflow || hasPrompt) {
+        const bits = [];
+        if (hasWorkflow) bits.push("workflow");
+        if (hasPrompt) bits.push("prompt");
+        renderResult(file.name, `Found ${bits.join(" + ")} in embedded metadata.`, "ok", parsed);
+      } else if (isWebm) {
+        renderResult(file.name, "No workflow found in this WebM/MKV. If this file includes audio, the workflow may have been stripped at write time.", "warn");
+      } else {
+        renderResult(file.name, "No workflow found in this MP4/MOV. If this file includes audio, the workflow may have been stripped at write time — see the PR linked below.", "warn");
+      }
+    }
+
+    async function handleFiles(list) {
+      for (const f of list) {
+        try { await handleFile(f); }
+        catch (e) {
+          console.error(e);
+          renderResult(f.name || "(unknown)", "Couldn't parse this file — " + (e && e.message ? e.message : "unknown error"), "err");
+        }
+      }
+    }
+
+    dropEl.addEventListener("dragover", (e) => { e.preventDefault(); dropEl.classList.add("hover"); });
+    dropEl.addEventListener("dragleave", () => dropEl.classList.remove("hover"));
+    dropEl.addEventListener("drop", (e) => {
+      e.preventDefault();
+      dropEl.classList.remove("hover");
+      if (e.dataTransfer && e.dataTransfer.files) handleFiles(e.dataTransfer.files);
+    });
+    fileEl.addEventListener("change", () => {
+      if (fileEl.files) handleFiles(fileEl.files);
+    });
+  </script>
+</body>
+</html>
