@@ -1,5 +1,7 @@
 # ComfyUI Workflow Rescue
 
+> **Status:** finished narrow utility, archived. The page still works at the live URL below — drop a file on it and it'll extract what it can. Not actively developed; the underlying VHS issues have producer-side fixes in flight at [VHS#672](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite/pull/672) (prompt double-stringify) and already-merged in main (audio-mux strip, commit `a6879b8`). This tool only really helps for the niche case of pulling the **API-shaped prompt JSON** out of pre-#672 video files — the workflow itself drag-drops into ComfyUI without any tool.
+
 A tiny browser-based extractor that pulls the embedded ComfyUI workflow + prompt JSON out of MP4 / MOV / WebM / MKV files exported by [ComfyUI-VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite). Everything runs locally in the browser — files never leave your computer.
 
 **Live:** https://booyaka101.github.io/comfyui-workflow-rescue/
