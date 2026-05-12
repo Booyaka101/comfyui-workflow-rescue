@@ -231,8 +231,8 @@
       <span class="name">Workflow Rescue</span>
     </div>
 
-    <h1>Recover ComfyUI workflows from your videos.</h1>
-    <p class="sub">Extracts the embedded workflow JSON from MP4, MOV, WebM, and MKV files exported by ComfyUI-VideoHelperSuite. Everything runs locally in your browser — files never leave your computer.</p>
+    <h1>Extract embedded workflow &amp; prompt JSON from VHS videos.</h1>
+    <p class="sub">Pulls the ComfyUI metadata out of MP4, MOV, WebM, and MKV files exported by ComfyUI-VideoHelperSuite. Everything runs locally in your browser — files never leave your computer.</p>
 
     <label class="drop" id="drop">
       <input type="file" id="file" accept="video/mp4,video/quicktime,video/x-m4v,video/webm,video/x-matroska,.mp4,.mov,.m4v,.webm,.mkv" multiple />
@@ -250,11 +250,13 @@
     <div class="results" id="results"></div>
 
     <div class="help">
-      <h3>What this is for</h3>
-      <p>If a video made with ComfyUI-VideoHelperSuite no longer drag-drops into ComfyUI, the workflow data may still be embedded in the file in a shape the frontend can't read directly. This page extracts it and gives you a <code>workflow.json</code> file you can open with ComfyUI's normal <em>Load</em> button.</p>
+      <h3>When this is useful</h3>
+      <p>Drop a video → if it has embedded ComfyUI metadata, you get <code>workflow.json</code> and <code>prompt.json</code> downloads. Useful when you specifically want the API-shaped prompt JSON without loading the full canvas — for example, to re-queue a generation programmatically.</p>
+      <p>For older VHS-exported files where the <code>prompt</code> was double-stringified before <a href="https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite/pull/672">VHS PR #672</a>, ComfyUI's normal drag-drop still loads the workflow correctly but silently drops the prompt. This page recovers that lost prompt.</p>
 
-      <h3>If you get "no workflow found"</h3>
-      <p>For videos that include audio, the workflow may have been stripped at write time — see <a href="https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite/pull/653">VHS PR #653</a>. In that case the data isn't in the file and no tool can recover it. If you still have the no-audio temp file from the same generation, that one usually works.</p>
+      <h3>What this <em>doesn't</em> fix</h3>
+      <p>If your video includes audio and was exported before <a href="https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite/pull/653">VHS PR #653</a>, the workflow may have been stripped entirely at write time by an unrelated audio-mux bug. In that case the bytes aren't in the file and no post-hoc tool can recover them. The fix is on the producer side. If you still have the no-audio temp file from the same generation, that one usually drag-drops normally into ComfyUI.</p>
+      <p>For everything else, ComfyUI's standard drag-drop already gives you the workflow back — you only need this tool if you specifically want the prompt JSON as a separate file.</p>
 
       <h3>Source</h3>
       <p>Open-source under MIT — <a href="https://github.com/Booyaka101/comfyui-workflow-rescue">github.com/Booyaka101/comfyui-workflow-rescue</a>. Issues and PRs welcome.</p>
@@ -569,11 +571,10 @@
         const bits = [];
         if (hasWorkflow) bits.push("workflow");
         if (hasPrompt) bits.push("prompt");
-        renderResult(file.name, `Found ${bits.join(" + ")} in embedded metadata.`, "ok", parsed);
-      } else if (isWebm) {
-        renderResult(file.name, "No workflow found in this WebM/MKV. If this file includes audio, the workflow may have been stripped at write time.", "warn");
+        renderResult(file.name, `Found ${bits.join(" + ")} embedded.`, "ok", parsed);
       } else {
-        renderResult(file.name, "No workflow found in this MP4/MOV. If this file includes audio, the workflow may have been stripped at write time — see the PR linked below.", "warn");
+        const kind = isWebm ? "WebM/MKV" : "MP4/MOV";
+        renderResult(file.name, `No embedded workflow or prompt in this ${kind}. If the file includes audio it may have been stripped at write time — see the audio-mux note in the help panel below.`, "warn");
       }
     }
 

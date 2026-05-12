@@ -1,21 +1,25 @@
 # ComfyUI Workflow Rescue
 
-A tiny browser-based tool that pulls the embedded ComfyUI workflow JSON out of MP4 / MOV / WebM / MKV files exported by [ComfyUI-VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite). Everything runs locally in the browser — files never leave your computer.
+A tiny browser-based extractor that pulls the embedded ComfyUI workflow + prompt JSON out of MP4 / MOV / WebM / MKV files exported by [ComfyUI-VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite). Everything runs locally in the browser — files never leave your computer.
 
 **Live:** https://booyaka101.github.io/comfyui-workflow-rescue/
 
-## What this is for
+## When this is useful
 
-If you have a video file produced by VHS and the workflow no longer drag-drops into ComfyUI, the data may still be embedded in the file — just in a shape the ComfyUI frontend can't read directly. Drop the file onto the page and it'll offer the workflow as a `workflow.json` file you can open with ComfyUI's normal *Load* button.
+Drop a video → if there's embedded ComfyUI metadata you get `workflow.json` and `prompt.json` as separate downloads.
 
-Covers two shapes of legacy bug:
+The narrow case where this tool actually adds something over ComfyUI's standard drag-drop:
 
-- **Double-stringified prompt** — VHS used to wrap `prompt` twice through `json.dumps`. The frontend's strict JSON parser couldn't decode the result. Producer-side fix is at [VHS#672](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite/pull/672); this tool unwraps the legacy double-encoding so existing files still load.
-- **Audio-mux strip** — when VHS adds audio to a video, the mux step re-encapsulates without `-movflags use_metadata_tags`, so custom tags get dropped entirely. Producer-side fix is at [VHS#653](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite/pull/653). If the metadata was already stripped at write time, no recovery is possible — the bytes aren't in the file. If you still have the no-audio temp version from the same generation, try that one.
+- **Recovering the silently-lost prompt from older VHS exports.** Before [VHS#672](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite/pull/672), `prompt` was double-stringified in the udta atom. ComfyUI's drag-drop still loads the *workflow* fine but silently drops the prompt. This tool reads through the double-encoding and gives you the prompt back. Useful if you want the API-shaped prompt JSON for re-queuing.
+
+## What this doesn't fix
+
+- **Audio-mux strip.** If your video includes audio and was exported before [VHS#653](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite/pull/653), the workflow may have been stripped at write time by an unrelated audio-mux bug. The bytes aren't in the file and no post-hoc tool can recover them. The fix is on the producer side. If you still have the no-audio temp file from the same generation, that one usually loads normally.
+- **Reading workflows that ComfyUI already reads fine.** For most files, ComfyUI's standard drag-drop gives you the workflow back. You only need this tool if you specifically want the prompt JSON as a separate file.
 
 ## How it works
 
-Vanilla JavaScript, no build step, no framework, no upload. The parsers mirror the ComfyUI frontend's own `isobmff.ts` (for MP4/MOV) and `ebml.ts` (for WebM/MKV) plus a strict legacy-string unwrap.
+Vanilla JavaScript, no build step, no framework, no upload. The parsers mirror the ComfyUI frontend's own `isobmff.ts` (for MP4/MOV) and `ebml.ts` (for WebM/MKV) plus a strict unwrap for the legacy double-stringified shape.
 
 ## License
 
